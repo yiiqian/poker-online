@@ -152,6 +152,25 @@
   .toast { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:rgba(192,57,43,.95); color:#fff; padding:8px 16px; border-radius:10px; font-size:13px; z-index:50; box-shadow:0 4px 12px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.show { opacity:1; }
   .conn { position:fixed; top:8px; right:10px; font-size:11px; padding:3px 8px; border-radius:8px; z-index:40; }
+  /* 右上角实时积分排名 */
+  .rank-panel {
+    position:fixed; top:34px; right:10px; z-index:39; width:158px;
+    background:rgba(13,31,21,.92); border:1px solid rgba(244,209,96,.35); border-radius:10px;
+    padding:8px 10px; box-shadow:0 4px 14px rgba(0,0,0,.5); font-size:12px;
+  }
+  .rank-title { color:#f4d160; font-weight:700; font-size:12px; margin-bottom:6px; text-align:center; letter-spacing:1px; }
+  .rank-item { display:flex; align-items:center; gap:6px; padding:3px 0; border-top:1px solid rgba(255,255,255,.06); }
+  .rank-item:first-child { border-top:none; }
+  .rank-pos { width:18px; text-align:center; font-weight:700; color:#9fd0b4; flex-shrink:0; }
+  .rank-item.top1 .rank-pos { color:#f4d160; }
+  .rank-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#eaf6ee; }
+  .rank-name.self { color:#f4d160; font-weight:600; }
+  .rank-name.ai { color:#9fd0b4; }
+  .rank-name.out { color:#7a6a6a; text-decoration:line-through; }
+  .rank-stack { color:#f4d160; font-weight:600; flex-shrink:0; }
+  @media (max-width:600px) {
+    .rank-panel { width:128px; top:32px; right:6px; padding:6px 8px; font-size:11px; }
+  }
   .conn.ok { background:rgba(30,132,73,.7); color:#cfe8d8; }
   .conn.bad { background:rgba(192,57,43,.8); color:#fff; }
   .hidden { display:none !important; }
@@ -160,6 +179,10 @@
 <body>
 <div class="conn bad" id="conn">连接中…</div>
 <div class="toast" id="toast"></div>
+<div class="rank-panel hidden" id="rank-panel">
+  <div class="rank-title">💰 积分排名</div>
+  <div id="rank-list"></div>
+</div>
 <div id="app">
   <h1>♠ 德州扑克 · 联机 ♥</h1>
 
@@ -397,6 +420,8 @@ function renderState(s) {
 
   $('table-note').textContent = `小盲 ${s.smallBlind} / 大盲 ${s.bigBlind} · 起始筹码 ${s.startStack} · 房主可补电脑`;
 
+  renderRank(s);
+
   // 补码按钮：筹码低于起始值时显示；已申请待生效则置灰提示
   const meSeat = s.players[s.yourSeat];
   const rebuyBtn = $('btn-rebuy');
@@ -420,14 +445,11 @@ function seatHTML(p, justDealt) {
   const cls = 'seat' + (p.folded?' folded':'') + (p.isActive?' active':'') + (p.winner?' winner':'') + ((!p.connected && !p.isAI)?' disconnected':'');
   const youTag = p.isSelf ? '<span class="you-tag">(你)</span>' : '';
   const dcTag = (!p.connected && !p.isAI) ? ' ⚠' : '';
-  // 补码累计 + 净赢净输（仅真人显示）
+  // 净赢净输（仅真人显示；补码累计额不再单独显示，排名榜已含当前筹码）
   let stat = '';
   if (!p.isAI) {
-    const parts = [];
-    if (p.totalRebuy > 0) parts.push(`补 ${p.totalRebuy}`);
-    if (p.net > 0) parts.push(`<span class="net-up">+${p.net}</span>`);
-    else if (p.net < 0) parts.push(`<span class="net-down">${p.net}</span>`);
-    if (parts.length) stat = `<div class="pstat">${parts.join(' · ')}</div>`;
+    if (p.net > 0) stat = `<div class="pstat"><span class="net-up">+${p.net}</span></div>`;
+    else if (p.net < 0) stat = `<div class="pstat"><span class="net-down">${p.net}</span></div>`;
   }
   // 准备阶段：已准备打勾
   const readyTag = (lastState && lastState.waitingReady && !p.isAI && !p.out)
@@ -447,6 +469,36 @@ function seatHTML(p, justDealt) {
   </div>`;
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ===== 右上角实时积分排名（按净赢净输排序） ===== */
+// 净额 = 当前筹码 - 总投入。真人用服务器算好的 net；AI 不补码，净额=筹码-起始
+function netOf(p, s) { return p.isAI ? (p.stack - s.startStack) : p.net; }
+function renderRank(s) {
+  const panel = $('rank-panel');
+  const players = s.players.filter(p => p);
+  if (players.length === 0) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  // 按净赢净输从高到低；并列时筹码多者优先，再真人优先
+  const sorted = players.slice().sort((a, b) => {
+    const na = netOf(a, s), nb = netOf(b, s);
+    if (nb !== na) return nb - na;
+    if (b.stack !== a.stack) return b.stack - a.stack;
+    return (a.isAI?1:0) - (b.isAI?1:0);
+  });
+  const medals = ['🥇', '🥈', '🥉'];
+  $('rank-list').innerHTML = sorted.map((p, i) => {
+    const pos = medals[i] || (i + 1);
+    const nameCls = 'rank-name' + (p.isSelf ? ' self' : '') + (p.isAI ? ' ai' : '') + (p.out ? ' out' : '');
+    const net = netOf(p, s);
+    const netStr = net > 0 ? `+${net}` : (net < 0 ? `${net}` : '0');
+    const netCls = net > 0 ? 'net-up' : (net < 0 ? 'net-down' : '');
+    return `<div class="rank-item ${i===0?'top1':''}">
+      <span class="rank-pos">${pos}</span>
+      <span class="${nameCls}">${esc(p.name)}</span>
+      <span class="rank-stack ${netCls}">${netStr}</span>
+    </div>`;
+  }).join('');
+}
 
 /* ===== 操作区 ===== */
 function updateControls(s) {
