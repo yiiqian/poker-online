@@ -1,0 +1,15 @@
+{
+  "name": "texas-poker-online",
+  "version": "1.0.0",
+  "description": "德州扑克联机版 —— 朋友间多人对战，支持 AI 补位",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
