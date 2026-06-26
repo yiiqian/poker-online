@@ -137,6 +137,17 @@
   .start-panel { display:flex; flex-direction:column; gap:10px; align-items:center; }
   .ai-pick { display:flex; align-items:center; gap:8px; font-size:13px; color:#cfe8d8; flex-wrap:wrap; justify-content:center; }
   .ai-pick .seg button { padding:6px 12px; min-width:34px; }
+  /* 准备面板 */
+  .ready-panel { display:flex; align-items:center; gap:12px; }
+  .btn-ready { background:linear-gradient(#27ae60,#1e8449); padding:11px 28px; font-size:16px; }
+  .ready-count { font-size:15px; color:#f4d160; font-weight:700; min-width:42px; }
+  .ready-count.urgent { color:#e07a5f; }
+  /* 名牌上的补码/净赢净输 与 准备标记 */
+  .pstat { font-size:10px; color:#cfe8d8; margin-top:1px; }
+  .pstat .net-up { color:#4ade80; font-weight:700; }
+  .pstat .net-down { color:#e07a5f; font-weight:700; }
+  .ready-tag { font-size:10px; margin-top:2px; color:#9fd0b4; }
+  .ready-tag.ok { color:#4ade80; font-weight:700; }
   .small-note { font-size:12px; color:#9fd0b4; text-align:center; margin-top:10px; line-height:1.5; }
   .toast { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:rgba(192,57,43,.95); color:#fff; padding:8px 16px; border-radius:10px; font-size:13px; z-index:50; box-shadow:0 4px 12px rgba(0,0,0,.5); opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.show { opacity:1; }
@@ -215,6 +226,12 @@
         <button class="btn-start" id="btn-start">开始游戏</button>
       </div>
       <div class="msg hidden" id="wait-msg" style="color:#9fd0b4;">等待房主开始游戏…</div>
+
+      <!-- 准备面板（每手间，等待全员准备） -->
+      <div class="ready-panel hidden" id="ready-panel">
+        <button class="btn-ready" id="btn-ready">准备</button>
+        <span class="ready-count" id="ready-count"></span>
+      </div>
 
       <!-- 行动区（轮到自己时显示） -->
       <div class="raise-wrap hidden" id="raise-box">
@@ -403,6 +420,18 @@ function seatHTML(p, justDealt) {
   const cls = 'seat' + (p.folded?' folded':'') + (p.isActive?' active':'') + (p.winner?' winner':'') + ((!p.connected && !p.isAI)?' disconnected':'');
   const youTag = p.isSelf ? '<span class="you-tag">(你)</span>' : '';
   const dcTag = (!p.connected && !p.isAI) ? ' ⚠' : '';
+  // 补码累计 + 净赢净输（仅真人显示）
+  let stat = '';
+  if (!p.isAI) {
+    const parts = [];
+    if (p.totalRebuy > 0) parts.push(`补 ${p.totalRebuy}`);
+    if (p.net > 0) parts.push(`<span class="net-up">+${p.net}</span>`);
+    else if (p.net < 0) parts.push(`<span class="net-down">${p.net}</span>`);
+    if (parts.length) stat = `<div class="pstat">${parts.join(' · ')}</div>`;
+  }
+  // 准备阶段：已准备打勾
+  const readyTag = (lastState && lastState.waitingReady && !p.isAI && !p.out)
+    ? (p.ready ? '<div class="ready-tag ok">✓ 已准备</div>' : '<div class="ready-tag">未准备</div>') : '';
   return `<div class="${cls}">
     <div class="cards">${cardsHTML}</div>
     <div class="hand-rank">${p.revealRank||''}</div>
@@ -410,6 +439,8 @@ function seatHTML(p, justDealt) {
       ${p.isDealer?'<span class="badge">D</span>':''}
       <div class="pname">${esc(p.name)}${youTag}${dcTag}<span class="pstyle">${p.style?(' · '+p.style):''}</span></div>
       <div class="pstack">筹码: ${p.stack}</div>
+      ${stat}
+      ${readyTag}
       <div class="action-tag">${p.lastAction||''}</div>
       <div class="bet-chips">${p.bet>0?`<span class="chip-icon"></span>${p.bet}`:''}</div>
     </div>
@@ -419,10 +450,25 @@ function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;'
 
 /* ===== 操作区 ===== */
 function updateControls(s) {
-  const startPanel = $('start-panel'), waitMsg = $('wait-msg'), actionRow = $('action-row'), raiseBox = $('raise-box');
+  const startPanel = $('start-panel'), waitMsg = $('wait-msg'), actionRow = $('action-row'), raiseBox = $('raise-box'), readyPanel = $('ready-panel');
   const handActive = s.handActive;
   const me = s.players[s.yourSeat];
   const myTurn = me && s.toActSeat === s.yourSeat && handActive && !me.folded && !me.allIn && !me.isAI;
+
+  // 准备阶段：显示准备按钮 + 倒计时
+  if (s.waitingReady) {
+    startPanel.classList.add('hidden'); waitMsg.classList.add('hidden');
+    actionRow.classList.add('hidden'); raiseBox.classList.add('hidden');
+    readyPanel.classList.remove('hidden');
+    startReadyCountdown(s.readyDeadline);
+    const iAmReady = me && me.ready;
+    const btn = $('btn-ready');
+    btn.disabled = iAmReady;
+    btn.textContent = iAmReady ? '已准备 ✓' : '准备';
+    return;
+  }
+  readyPanel.classList.add('hidden');
+  stopReadyCountdown();
 
   // 未开局：房主见开始面板，其他人见等待
   if (!handActive && s.stage !== 'showdown') {
@@ -503,6 +549,23 @@ function act(action) {
   $('action-row').classList.add('hidden'); $('raise-box').classList.add('hidden');
   send({ t:'action', action });
 }
+
+/* ===== 准备 + 倒计时 ===== */
+$('btn-ready').onclick = () => { if ($('btn-ready').disabled) return; send({ t:'ready' }); };
+let readyTick = null;
+function startReadyCountdown(deadline) {
+  stopReadyCountdown();
+  const render = () => {
+    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    const el = $('ready-count');
+    el.textContent = left + 's';
+    el.classList.toggle('urgent', left <= 5);
+    if (left <= 0) stopReadyCountdown();
+  };
+  render();
+  readyTick = setInterval(render, 500);
+}
+function stopReadyCountdown() { if (readyTick) { clearInterval(readyTick); readyTick = null; } }
 
 /* ===== 开始面板 / AI ===== */
 $('ai-seg').addEventListener('click', e => {

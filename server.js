@@ -206,6 +206,13 @@ function handleMessage(ws, m) {
       broadcastState(room, { msg: res.immediate ? `${name} 补码到 ${stack}` : `${name} 申请补码（下一手生效）` });
       break;
     }
+    case 'ready': {
+      const room = ws.room && rooms.get(ws.room);
+      if (!room) return;
+      const res = room.table.setReady(ws.id);
+      if (!res.ok) send(ws, { t: 'error', msg: res.err });
+      break;
+    }
     case 'chat': {
       const room = ws.room && rooms.get(ws.room);
       if (!room) return;

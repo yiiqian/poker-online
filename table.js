@@ -34,8 +34,11 @@ class Table {
     this.handActive = false;
     this.handNo = 0;
     this.lastResult = null; // 上一手摊牌结果（给前端展示）
+    this.waitingReady = false;  // 是否处于"等待准备"阶段
+    this.readyDeadline = 0;     // 准备倒计时截止时间戳
     this._aiTimer = null;
     this._autoTimer = null;
+    this._readyTimer = null;
   }
 
   /* ---------- 座位管理 ---------- */
@@ -56,7 +59,8 @@ class Table {
       id, name, isAI: false, persona: null,
       stack: this.startStack, cards: [], bet: 0, totalBet: 0,
       folded: true, allIn: false, out: false, actedThisRound: false,
-      connected: true, lastAction: '', sittingOut: true
+      connected: true, lastAction: '', sittingOut: true,
+      totalRebuy: 0, ready: false
     };
     this.log(`玩家 ${name} 坐到座位 ${seat}`);
     return seat;
@@ -91,6 +95,7 @@ class Table {
       return { ok: true, immediate: false };
     }
     // 否则（手间/已出局/已弃牌且想下手回来）立即补，并解除出局/坐出
+    p.totalRebuy = (p.totalRebuy || 0) + (this.startStack - p.stack);
     p.stack = this.startStack;
     p.out = false;
     p.sittingOut = false;
@@ -102,6 +107,7 @@ class Table {
   applyPendingRebuys() {
     for (const p of this.occupiedSeats()) {
       if (p.pendingRebuy) {
+        p.totalRebuy = (p.totalRebuy || 0) + (this.startStack - p.stack);
         p.stack = this.startStack;
         p.out = false;
         p.sittingOut = false;
@@ -420,12 +426,70 @@ class Table {
 
   scheduleNextHand() {
     this.broadcast();
-    // 给玩家几秒看摊牌结果，然后自动开下一手（若仍够人）
-    this._autoTimer = this.schedule(() => {
-      const alive = this.alivePlayers();
-      if (alive.length >= 2) this.startHand();
-      else { this.stage = 'idle'; this.broadcast({ msg: '等待更多玩家加入或补充 AI 后继续。' }); }
-    }, 5000);
+    // 给玩家几秒看摊牌结果，然后进入"准备"阶段
+    this._autoTimer = this.schedule(() => this.beginReadyPhase(), 4000);
+  }
+
+  // 进入准备阶段：清空所有人准备状态，开始 READY_TIMEOUT 倒计时，等真人点准备。
+  beginReadyPhase() {
+    // 有筹码的真人需要准备；筹码为 0 的标记出局（需补码才回来）
+    for (const p of this.occupiedSeats()) {
+      if (p.stack <= 0 && !p.isAI) p.out = true;
+      p.ready = false;
+    }
+    // 没有任何能玩的真人（全是AI或没人）就直接尝试开（纯AI桌不需要准备）
+    const humansCanPlay = this.occupiedSeats().filter(p => !p.isAI && !p.out && p.stack > 0);
+    if (humansCanPlay.length === 0) {
+      this.tryStartAfterReady();
+      return;
+    }
+    this.waitingReady = true;
+    this.stage = 'waiting';
+    this.readyDeadline = Date.now() + Table.READY_TIMEOUT;
+    this.broadcast({ msg: '请点击「准备」开始下一手' });
+    // 倒计时到点：未准备的真人坐出，然后开局
+    this._readyTimer = this.schedule(() => {
+      for (const p of this.occupiedSeats()) {
+        if (!p.isAI && !p.out && p.stack > 0 && !p.ready) {
+          p.sittingOut = true;   // 超时未准备 -> 本局坐出（可下次再准备回来）
+        }
+      }
+      this.finishReadyPhase();
+    }, Table.READY_TIMEOUT);
+  }
+
+  // 真人点准备
+  setReady(id) {
+    const seat = this.seatOf(id);
+    if (seat === -1) return { ok: false, err: '你不在座位上' };
+    if (!this.waitingReady) return { ok: false, err: '现在不是准备阶段' };
+    const p = this.seats[seat];
+    p.ready = true;
+    p.sittingOut = false;   // 准备了就重新入局
+    this.broadcast({ msg: `${p.name} 已准备` });
+    this.checkAllReady();
+    return { ok: true };
+  }
+
+  // 若所有"能玩的真人"都已准备，则提前结束准备阶段开局
+  checkAllReady() {
+    const humansCanPlay = this.occupiedSeats().filter(p => !p.isAI && !p.out && p.stack > 0 && !p.sittingOut);
+    if (humansCanPlay.length > 0 && humansCanPlay.every(p => p.ready)) {
+      if (this._readyTimer) { this.cancel(this._readyTimer); this._readyTimer = null; }
+      this.finishReadyPhase();
+    }
+  }
+
+  finishReadyPhase() {
+    this.waitingReady = false;
+    this.readyDeadline = 0;
+    this.tryStartAfterReady();
+  }
+
+  tryStartAfterReady() {
+    const alive = this.alivePlayers();
+    if (alive.length >= 2) this.startHand();
+    else { this.stage = 'idle'; this.handActive = false; this.broadcast({ msg: '人数不足，等待更多玩家加入或补充 AI 后继续。' }); }
   }
 
   /* ---------- 状态视图（给前端） ---------- */
@@ -451,6 +515,10 @@ class Table {
         isSelf, lastAction: p.lastAction || '',
         winner: !!p.winner, revealRank: showdown ? (p.revealRank || '') : '',
         pendingRebuy: !!p.pendingRebuy,
+        totalRebuy: p.isAI ? 0 : (p.totalRebuy || 0),
+        // 净赢/净输 = 当前筹码 - 总投入(起始 + 累计补码)。AI 不计
+        net: p.isAI ? 0 : (p.stack - (this.startStack + (p.totalRebuy || 0))),
+        ready: !!p.ready,
         cards
       };
     });
@@ -462,11 +530,16 @@ class Table {
       bigBlind: PC.BIG_BLIND, smallBlind: PC.SMALL_BLIND,
       startStack: this.startStack,
       lastResult: this.lastResult,
+      waitingReady: this.waitingReady,
+      readyDeadline: this.readyDeadline || 0,
       yourSeat: this.seatOf(forId)
     };
   }
 
   broadcast(extra) { this.onState(extra || {}); }
 }
+
+// 准备阶段倒计时（毫秒）：超时未准备的真人本局坐出
+Table.READY_TIMEOUT = 20000;
 
 module.exports = { Table };
