@@ -84,39 +84,22 @@ class Table {
   }
 
   // 中途补码：每次补"一整份起始筹码"（如起始2000则 +2000，不论当前剩多少）。
-  // 进行中申请则下一手生效。返回 { ok, err, immediate }。
+  // 仅在"准备阶段"可补，立即生效。返回 { ok, err, immediate }。
   requestRebuy(id) {
     const seat = this.seatOf(id);
     if (seat === -1) return { ok: false, err: '你不在座位上' };
     const p = this.seats[seat];
     if (p.isAI) return { ok: false, err: '电脑玩家不能补码' };
+    // 只允许在准备阶段补码
+    if (!this.waitingReady) return { ok: false, err: '只能在准备阶段补码' };
     // 补码门槛：筹码必须低于 REBUY_THRESHOLD 才能补
     if (p.stack >= Table.REBUY_THRESHOLD) return { ok: false, err: `筹码需低于 ${Table.REBUY_THRESHOLD} 才能补码（当前 ${p.stack}）` };
-    // 当前手牌进行中且该玩家还在这手里：标记待处理，下一手生效
-    if (this.handActive && !p.folded && !p.out) {
-      p.pendingRebuy = true;
-      return { ok: true, immediate: false };
-    }
-    // 否则（手间/已出局/已弃牌且想下手回来）立即补一份起始筹码，并解除出局/坐出
+    // 立即补一份起始筹码，并解除出局/坐出
     p.totalRebuy = (p.totalRebuy || 0) + this.startStack;
     p.stack += this.startStack;
     p.out = false;
     p.sittingOut = false;
-    p.pendingRebuy = false;
     return { ok: true, immediate: true };
-  }
-
-  // 把所有待处理的补码兑现（在 startHand 开头调用），每份 +startStack
-  applyPendingRebuys() {
-    for (const p of this.occupiedSeats()) {
-      if (p.pendingRebuy) {
-        p.totalRebuy = (p.totalRebuy || 0) + this.startStack;
-        p.stack += this.startStack;
-        p.out = false;
-        p.sittingOut = false;
-        p.pendingRebuy = false;
-      }
-    }
   }
 
   // 用 AI 把空座位补满到目标人数（至少 2 人能开局），不超过本桌座位数
@@ -171,8 +154,6 @@ class Table {
   alivePlayers() { return this.occupiedSeats().filter(p => !p.out && p.stack > 0 && !p.sittingOut); }
 
   startHand() {
-    // 先兑现上一手期间提交的补码请求
-    this.applyPendingRebuys();
     // 淘汰没钱的
     for (const p of this.occupiedSeats()) { if (p.stack <= 0) p.out = true; }
     const alive = this.alivePlayers();
@@ -518,7 +499,6 @@ class Table {
         isActive: seat === this.toAct && this.handActive,
         isSelf, lastAction: p.lastAction || '',
         winner: !!p.winner, revealRank: showdown ? (p.revealRank || '') : '',
-        pendingRebuy: !!p.pendingRebuy,
         totalRebuy: p.isAI ? 0 : (p.totalRebuy || 0),
         // 净赢/净输 = 当前筹码 - 总投入(起始 + 累计补码)。AI 不计
         net: p.isAI ? 0 : (p.stack - (this.startStack + (p.totalRebuy || 0))),

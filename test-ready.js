@@ -105,7 +105,8 @@ function makeRunner() {
   const table = new Table({ startStack: 1000, schedule: (fn)=>setTimeout(fn,0), cancel:()=>{}, onState: () => {} });
   table.addHuman('u1', '甲');
   const p = table.seats[table.seatOf('u1')];
-  // 手间：输到 100（低于门槛200），补一份起始筹码 +1000
+  table.waitingReady = true;     // 补码只在准备阶段可用
+  // 准备阶段：输到 100（低于门槛200），补一份起始筹码 +1000
   p.stack = 100;
   table.requestRebuy('u1');
   ok('C: 首次补码 totalRebuy=1000(一份起始)', p.totalRebuy === 1000);
@@ -140,6 +141,7 @@ function makeRunner() {
 (function () {
   const table = new Table({ startStack: 1000, schedule: (fn)=>setTimeout(fn,0), cancel:()=>{}, onState: () => {} });
   table.addHuman('u1', '甲');
+  table.waitingReady = true;     // 准备阶段才测门槛
   const p = table.seats[table.seatOf('u1')];
   // 筹码 500，高于门槛 -> 拒绝
   p.stack = 500;

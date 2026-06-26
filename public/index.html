@@ -438,14 +438,14 @@ function renderState(s) {
 
   renderRank(s);
 
-  // 补码按钮：筹码低于补码门槛时才显示；已申请待生效则置灰提示
+  // 补码按钮：仅在准备阶段、且筹码低于门槛时显示
   const meSeat = s.players[s.yourSeat];
   const rebuyBtn = $('btn-rebuy');
   const threshold = s.rebuyThreshold || 200;
-  if (meSeat && !meSeat.isAI && meSeat.stack < threshold) {
+  if (s.waitingReady && meSeat && !meSeat.isAI && meSeat.stack < threshold) {
     rebuyBtn.classList.remove('hidden');
-    if (meSeat.pendingRebuy) { rebuyBtn.disabled = true; rebuyBtn.textContent = '补码已排队'; }
-    else { rebuyBtn.disabled = false; rebuyBtn.textContent = `补码 +${s.startStack}`; }
+    rebuyBtn.disabled = false;
+    rebuyBtn.textContent = `补码 +${s.startStack}`;
   } else {
     rebuyBtn.classList.add('hidden');
   }
