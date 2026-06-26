@@ -57,11 +57,11 @@ function genRoomCode() {
   return code;
 }
 
-function makeRoom(startStack) {
+function makeRoom(startStack, maxSeats) {
   const code = genRoomCode();
   const room = { code, hostId: null, clients: new Map(), table: null };
   room.table = new Table({
-    startStack,
+    startStack, maxSeats,
     onState: (extra) => broadcastState(room, extra),
     log: (m) => console.log(`[${code}] ${m}`)
   });
@@ -127,7 +127,8 @@ function handleMessage(ws, m) {
   switch (m.t) {
     case 'create': {
       const stack = [1000, 2000, 3000].includes(m.startStack) ? m.startStack : 1000;
-      const room = makeRoom(stack);
+      const seats = (m.maxSeats >= 2 && m.maxSeats <= 6) ? (m.maxSeats | 0) : 6;
+      const room = makeRoom(stack, seats);
       const name = (m.name || '玩家').slice(0, 12);
       joinRoom(ws, room, name);
       room.hostId = ws.id;
@@ -138,7 +139,7 @@ function handleMessage(ws, m) {
     case 'join': {
       const room = rooms.get((m.room || '').toUpperCase().trim());
       if (!room) { send(ws, { t: 'error', msg: '房间不存在，请检查房间号' }); return; }
-      if (room.table.humanCount() >= 6) { send(ws, { t: 'error', msg: '房间已满（最多6人）' }); return; }
+      if (room.table.occupiedSeats().length >= room.table.maxSeats) { send(ws, { t: 'error', msg: `房间已满（${room.table.maxSeats}人桌）` }); return; }
       const name = (m.name || '玩家').slice(0, 12);
       const seat = joinRoom(ws, room, name);
       if (seat === -1) { send(ws, { t: 'error', msg: '没有空座位了' }); return; }
@@ -203,7 +204,7 @@ function handleMessage(ws, m) {
       const seat = room.table.seatOf(ws.id);
       const name = seat !== -1 ? room.table.seats[seat].name : '玩家';
       const stack = room.table.startStack;
-      broadcastState(room, { msg: res.immediate ? `${name} 补码到 ${stack}` : `${name} 申请补码（下一手生效）` });
+      broadcastState(room, { msg: res.immediate ? `${name} 补码 +${stack}` : `${name} 申请补码（下一手生效）` });
       break;
     }
     case 'ready': {

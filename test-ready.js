@@ -105,15 +105,16 @@ function makeRunner() {
   const table = new Table({ startStack: 1000, schedule: (fn)=>setTimeout(fn,0), cancel:()=>{}, onState: () => {} });
   table.addHuman('u1', '甲');
   const p = table.seats[table.seatOf('u1')];
-  // 手间：输到 300，补码立即生效，补了 700
-  p.stack = 300;
+  // 手间：输到 100（低于门槛200），补一份起始筹码 +1000
+  p.stack = 100;
   table.requestRebuy('u1');
-  ok('C: 首次补码 totalRebuy=700', p.totalRebuy === 700);
-  ok('C: 补码后筹码=1000', p.stack === 1000);
-  // 再输到 0，再补 1000，累计应为 1700
+  ok('C: 首次补码 totalRebuy=1000(一份起始)', p.totalRebuy === 1000);
+  ok('C: 补码后筹码 = 100 + 1000 = 1100', p.stack === 1100);
+  // 再输到 0，再补一份 +1000，累计应为 2000
   p.stack = 0;
   table.requestRebuy('u1');
-  ok('C: 二次补码 totalRebuy 累计=1700', p.totalRebuy === 1700);
+  ok('C: 二次补码 totalRebuy 累计=2000', p.totalRebuy === 2000);
+  ok('C: 二次补码后筹码 = 0 + 1000 = 1000', p.stack === 1000);
 })();
 
 /* ---------- D. 净赢/净输计算（视图） ---------- */
@@ -133,6 +134,23 @@ function makeRunner() {
   ok('D: u1 totalRebuy=1000', v1.totalRebuy === 1000);
   ok('D: u1 净赢 = 2500-(1000+1000) = +500', v1.net === 500);
   ok('D: u2 净输 = 600-1000 = -400', v2.net === -400);
+})();
+
+/* ---------- E. 补码门槛：筹码 >= 200 拒绝，< 200 才可补 ---------- */
+(function () {
+  const table = new Table({ startStack: 1000, schedule: (fn)=>setTimeout(fn,0), cancel:()=>{}, onState: () => {} });
+  table.addHuman('u1', '甲');
+  const p = table.seats[table.seatOf('u1')];
+  // 筹码 500，高于门槛 -> 拒绝
+  p.stack = 500;
+  ok('E: 筹码500(>=200)拒绝补码', table.requestRebuy('u1').ok === false);
+  // 恰好 200 -> 拒绝（门槛是"低于200"）
+  p.stack = 200;
+  ok('E: 筹码恰好200拒绝补码', table.requestRebuy('u1').ok === false);
+  // 199 -> 允许
+  p.stack = 199;
+  ok('E: 筹码199(<200)允许补码', table.requestRebuy('u1').ok === true);
+  ok('E: 视图暴露 rebuyThreshold=200', table.viewFor('u1').rebuyThreshold === 200);
 })();
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);

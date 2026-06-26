@@ -13,16 +13,18 @@ const PC = require('./poker-core');
 const STAGE_NEXT = { preflop: 'flop', flop: 'turn', turn: 'river' };
 
 class Table {
-  // opts: { startStack, onState, schedule, log }
+  // opts: { startStack, maxSeats, onState, schedule, log }
   constructor(opts) {
     this.startStack = opts.startStack || 1000;
+    // 桌子座位数，2–6，默认 6。每个房间可不同。
+    this.maxSeats = Math.min(PC.MAX_SEATS, Math.max(2, opts.maxSeats || PC.MAX_SEATS));
     this.onState = opts.onState || (() => {});
     // schedule(fn, ms) -> 返回可取消的 handle；默认用 setTimeout
     this.schedule = opts.schedule || ((fn, ms) => setTimeout(fn, ms));
     this.cancel = opts.cancel || ((h) => clearTimeout(h));
     this.log = opts.log || (() => {});
 
-    this.seats = new Array(PC.MAX_SEATS).fill(null);
+    this.seats = new Array(this.maxSeats).fill(null);
     this.deck = [];
     this.board = [];
     this.pot = 0;
@@ -81,34 +83,35 @@ class Table {
     if (seat !== -1) this.seats[seat].connected = val;
   }
 
-  // 中途补码：标记待处理，下一手开始时把筹码补到起始值。
-  // 返回 { ok, err, immediate } —— immediate 表示当前没在进行中的手牌、已立即补上。
+  // 中途补码：每次补"一整份起始筹码"（如起始2000则 +2000，不论当前剩多少）。
+  // 进行中申请则下一手生效。返回 { ok, err, immediate }。
   requestRebuy(id) {
     const seat = this.seatOf(id);
     if (seat === -1) return { ok: false, err: '你不在座位上' };
     const p = this.seats[seat];
     if (p.isAI) return { ok: false, err: '电脑玩家不能补码' };
-    if (p.stack >= this.startStack) return { ok: false, err: `筹码不少于起始值（${this.startStack}），无需补码` };
+    // 补码门槛：筹码必须低于 REBUY_THRESHOLD 才能补
+    if (p.stack >= Table.REBUY_THRESHOLD) return { ok: false, err: `筹码需低于 ${Table.REBUY_THRESHOLD} 才能补码（当前 ${p.stack}）` };
     // 当前手牌进行中且该玩家还在这手里：标记待处理，下一手生效
     if (this.handActive && !p.folded && !p.out) {
       p.pendingRebuy = true;
       return { ok: true, immediate: false };
     }
-    // 否则（手间/已出局/已弃牌且想下手回来）立即补，并解除出局/坐出
-    p.totalRebuy = (p.totalRebuy || 0) + (this.startStack - p.stack);
-    p.stack = this.startStack;
+    // 否则（手间/已出局/已弃牌且想下手回来）立即补一份起始筹码，并解除出局/坐出
+    p.totalRebuy = (p.totalRebuy || 0) + this.startStack;
+    p.stack += this.startStack;
     p.out = false;
     p.sittingOut = false;
     p.pendingRebuy = false;
     return { ok: true, immediate: true };
   }
 
-  // 把所有待处理的补码兑现（在 startHand 开头调用）
+  // 把所有待处理的补码兑现（在 startHand 开头调用），每份 +startStack
   applyPendingRebuys() {
     for (const p of this.occupiedSeats()) {
       if (p.pendingRebuy) {
-        p.totalRebuy = (p.totalRebuy || 0) + (this.startStack - p.stack);
-        p.stack = this.startStack;
+        p.totalRebuy = (p.totalRebuy || 0) + this.startStack;
+        p.stack += this.startStack;
         p.out = false;
         p.sittingOut = false;
         p.pendingRebuy = false;
@@ -116,8 +119,9 @@ class Table {
     }
   }
 
-  // 用 AI 把空座位补满到目标人数（至少 2 人能开局）
+  // 用 AI 把空座位补满到目标人数（至少 2 人能开局），不超过本桌座位数
   fillWithAI(targetCount) {
+    targetCount = Math.min(targetCount, this.maxSeats);
     const usedNames = new Set(this.occupiedSeats().filter(p => p.isAI).map(p => p.persona.name));
     let personaIdx = 0;
     while (this.occupiedSeats().length < targetCount) {
@@ -529,6 +533,8 @@ class Table {
       toActSeat: this.toAct, dealerSeat: this.dealerSeat,
       bigBlind: PC.BIG_BLIND, smallBlind: PC.SMALL_BLIND,
       startStack: this.startStack,
+      maxSeats: this.maxSeats,
+      rebuyThreshold: Table.REBUY_THRESHOLD,
       lastResult: this.lastResult,
       waitingReady: this.waitingReady,
       readyDeadline: this.readyDeadline || 0,
@@ -541,5 +547,7 @@ class Table {
 
 // 准备阶段倒计时（毫秒）：超时未准备的真人本局坐出
 Table.READY_TIMEOUT = 20000;
+// 补码门槛：筹码低于此值才能补码（防止筹码充裕时反复补码）
+Table.REBUY_THRESHOLD = 200;
 
 module.exports = { Table };

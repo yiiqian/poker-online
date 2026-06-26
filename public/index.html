@@ -201,6 +201,16 @@
         <button data-stack="3000">3000</button>
       </div>
     </div>
+    <div class="field">
+      <label>牌桌人数</label>
+      <div class="seg" id="seats-seg">
+        <button data-seats="2">2人</button>
+        <button data-seats="3">3人</button>
+        <button data-seats="4">4人</button>
+        <button data-seats="5">5人</button>
+        <button data-seats="6" class="on">6人</button>
+      </div>
+    </div>
     <button class="btn-primary" id="btn-create">创建房间</button>
     <div class="divider">或</div>
     <h2>加入已有房间</h2>
@@ -243,6 +253,7 @@
             <button data-ai="2">2人</button>
             <button data-ai="3">3人</button>
             <button data-ai="4">4人</button>
+            <button data-ai="5">5人</button>
             <button data-ai="6">6人</button>
           </div>
         </div>
@@ -306,7 +317,7 @@ const $ = id => document.getElementById(id);
 
 /* ===== 连接 ===== */
 let ws = null, myId = null, myName = '', roomCode = '', isHost = false;
-let lastState = null, prevStage = null, chosenStack = 1000, chosenAI = 0;
+let lastState = null, prevStage = null, chosenStack = 1000, chosenAI = 0, chosenSeats = 6;
 let reconnectTimer = null;
 
 function wsURL() {
@@ -352,10 +363,15 @@ $('stack-seg').addEventListener('click', e => {
   chosenStack = +b.dataset.stack;
   for (const x of $('stack-seg').children) x.classList.toggle('on', x === b);
 });
+$('seats-seg').addEventListener('click', e => {
+  const b = e.target.closest('button[data-seats]'); if (!b) return;
+  chosenSeats = +b.dataset.seats;
+  for (const x of $('seats-seg').children) x.classList.toggle('on', x === b);
+});
 $('btn-create').onclick = () => {
   const name = $('name-input').value.trim() || '玩家';
   myName = name;
-  send({ t:'create', name, startStack: chosenStack });
+  send({ t:'create', name, startStack: chosenStack, maxSeats: chosenSeats });
 };
 $('btn-join').onclick = () => {
   const name = $('name-input').value.trim() || '玩家';
@@ -418,17 +434,18 @@ function renderState(s) {
   $('stage').textContent = stageNames[s.stage] || '';
   $('msg').textContent = s.msg || '';
 
-  $('table-note').textContent = `小盲 ${s.smallBlind} / 大盲 ${s.bigBlind} · 起始筹码 ${s.startStack} · 房主可补电脑`;
+  $('table-note').textContent = `${s.maxSeats}人桌 · 小盲 ${s.smallBlind} / 大盲 ${s.bigBlind} · 起始筹码 ${s.startStack} · 房主可补电脑`;
 
   renderRank(s);
 
-  // 补码按钮：筹码低于起始值时显示；已申请待生效则置灰提示
+  // 补码按钮：筹码低于补码门槛时才显示；已申请待生效则置灰提示
   const meSeat = s.players[s.yourSeat];
   const rebuyBtn = $('btn-rebuy');
-  if (meSeat && !meSeat.isAI && meSeat.stack < s.startStack) {
+  const threshold = s.rebuyThreshold || 200;
+  if (meSeat && !meSeat.isAI && meSeat.stack < threshold) {
     rebuyBtn.classList.remove('hidden');
     if (meSeat.pendingRebuy) { rebuyBtn.disabled = true; rebuyBtn.textContent = '补码已排队'; }
-    else { rebuyBtn.disabled = false; rebuyBtn.textContent = `补码到 ${s.startStack}`; }
+    else { rebuyBtn.disabled = false; rebuyBtn.textContent = `补码 +${s.startStack}`; }
   } else {
     rebuyBtn.classList.add('hidden');
   }
@@ -525,7 +542,21 @@ function updateControls(s) {
   // 未开局：房主见开始面板，其他人见等待
   if (!handActive && s.stage !== 'showdown') {
     actionRow.classList.add('hidden'); raiseBox.classList.add('hidden');
-    if (isHost) { startPanel.classList.remove('hidden'); waitMsg.classList.add('hidden'); }
+    if (isHost) {
+      startPanel.classList.remove('hidden'); waitMsg.classList.add('hidden');
+      // 补 AI 选项不超过本桌座位数；超出的隐藏，若当前选中被隐藏则回退到"不补"
+      for (const b of $('ai-seg').children) {
+        const v = +b.dataset.ai;
+        const over = v > s.maxSeats;
+        b.classList.toggle('hidden', over);
+        if (over && b.classList.contains('on')) {
+          b.classList.remove('on');
+          const none = $('ai-seg').querySelector('[data-ai="0"]');
+          if (none) none.classList.add('on');
+          chosenAI = 0;
+        }
+      }
+    }
     else { startPanel.classList.add('hidden'); waitMsg.classList.remove('hidden'); }
     return;
   }
